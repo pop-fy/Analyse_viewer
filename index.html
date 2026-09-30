@@ -87,7 +87,9 @@ function parseMd(text, fname) {
     gap: (sec.match(/\*\*จุดที่ควรพัฒนา:\s*(.*?)\*\*/) || [])[1] || '',
     items: sec.split(/^#### /m).slice(1).map(it => ({
       t: it.split('\n')[0].trim(), s: +(it.match(/\*\*คะแนน:\*\*\s*(\d)\s*\//) || [])[1],
-      q: field('หลักฐาน', it), r: field('เหตุผล', it),
+      // one quote per activity: "**หลักฐาน:**" followed by "- “...” (กิจกรรม N)" lines (older files: quote on the same line)
+      q: [field('หลักฐาน', it), ...((it.split('**หลักฐาน:**')[1] || '').split('**เหตุผล:**')[0].match(/^- .*$/gm) || []).map(l => l.slice(2))].filter(Boolean),
+      r: field('เหตุผล', it),
     })),
   }));
   if (domains.length !== 4 || domains.some(d => d.items.length !== 5 || d.items.some(i => !(i.s >= 0 && i.s <= 4))))
@@ -176,7 +178,7 @@ function buildHtml(ev) {
           <div class="criterion-num">${n}.${k + 1}</div>
           <div class="criterion-body">
             <h4 class="criterion-title">${esc(it.t)}</h4>
-            <div class="evidence-quote">${esc(it.q)}</div>
+            ${it.q.map(q => `<div class="evidence-quote" style="margin-bottom: 6px;">${linkRefs(esc(q), acts)}</div>`).join('')}
             <p class="rationale-text"><strong>เหตุผลและหลักฐาน:</strong> ${linkRefs(esc(it.r), acts)}</p>
             <div class="raw-panel" hidden></div>
           </div>
