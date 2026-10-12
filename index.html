@@ -68,13 +68,15 @@ details.ask pre{white-space:pre-wrap;word-break:break-word;font:inherit;margin:6
   <h1 id="title">ตัวดูผลวิเคราะห์ตามผู้รับผิดชอบ</h1>
   <button id="pick">เลือก folder ของคุณ</button>
   <button id="back" class="ghost" style="display:none">← กลับ</button>
+  <button id="pickzip" class="ghost">เลือกไฟล์ zip</button>
   <input id="dir" type="file" webkitdirectory multiple hidden>
+  <input id="zip" type="file" accept=".zip" hidden>
 </header>
 <main id="main">
   <div class="panel">
     <p><b>วิธีใช้</b></p>
     <ol>
-      <li>กด “เลือก folder ของคุณ” แล้วเลือก folder ที่เป็นชื่อคุณ (เช่น <code>พี่แจม</code>) หรือเลือก <code>แบ่งงาน</code> ทั้งอัน</li>
+      <li>กด “เลือก folder ของคุณ” แล้วเลือก folder ที่เป็นชื่อคุณ (เช่น <code>พี่แจม</code>) หรือเลือก <code>แบ่งงาน</code> ทั้งอัน — ถ้ามีเป็นไฟล์ .zip ให้กด “เลือกไฟล์ zip” แทน</li>
       <li>เลือกหน่วยงานที่ต้องการ จากนั้นสลับแท็บ <b>วิเคราะห์ / Raw / ไฟล์แนบ</b></li>
       <li>ในแท็บวิเคราะห์ กดเลข “กิจกรรม N” เพื่อเปิดข้อความต้นฉบับใต้จุดที่กด ข้อความที่ใช้เป็นหลักฐานจะถูกไฮไลต์ (กดซ้ำเพื่อปิด)</li>
     </ol>
@@ -264,7 +266,7 @@ return { parseMd, buildHtml, grade, BAND };
 function build(files) {
   owners = {};
   for (const f of files) {
-    const p = (f.webkitRelativePath || f.name).split('/');
+    const p = (f.path || f.webkitRelativePath || f.name).split('/');
     const name = p[p.length - 1];
     let owner, code, group = null;
     const ai = p.indexOf(ATT);
@@ -485,6 +487,47 @@ async function unit(o, code, tab = 'analysis', act = null) {
 
 $('#pick').onclick = () => $('#dir').click();
 $('#dir').onchange = e => { build([...e.target.files]); home(); };
+$('#pickzip').onclick = () => $('#zip').click();
+$('#zip').onchange = async e => {
+  const z = e.target.files[0]; if (!z) return;
+  $('#main').innerHTML = '<div class="panel">กำลังแตกไฟล์ zip…</div>';
+  try { build(await unzip(z)); home(); }
+  catch (err) { $('#main').innerHTML = `<div class="panel">อ่าน zip ไม่ได้: ${esc(err.message)}</div>`; }
+  e.target.value = '';
+};
+
+// ---------- zip (stored / deflate only) ----------
+// ponytail: no zip64 (>4GB / >65535 files) and no encryption; add when such zips show up
+async function unzip(zip) {
+  const bytes = async (a, b) => new DataView(await zip.slice(a, b).arrayBuffer());
+  const tailAt = Math.max(0, zip.size - 65557), tail = await bytes(tailAt, zip.size);
+  let e = tail.byteLength - 22;
+  while (e >= 0 && tail.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) throw new Error('ไม่ใช่ไฟล์ zip');
+  const n = tail.getUint16(e + 10, true), cdOff = tail.getUint32(e + 16, true);
+  if (cdOff === 0xFFFFFFFF) throw new Error('ไม่รองรับ zip64');
+  const cd = await bytes(cdOff, cdOff + tail.getUint32(e + 12, true));
+  const MIME = {pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', csv: 'text/csv', md: 'text/markdown'};
+  const out = [];
+  for (let i = 0, p = 0; i < n; i++) {
+    const flags = cd.getUint16(p + 8, true), method = cd.getUint16(p + 10, true), size = cd.getUint32(p + 20, true);
+    const nlen = cd.getUint16(p + 28, true), off = cd.getUint32(p + 42, true);
+    const raw = new Uint8Array(cd.buffer, p + 46, nlen);
+    p += 46 + nlen + cd.getUint16(p + 30, true) + cd.getUint16(p + 32, true);
+    let path;  // Windows "Send to > Compressed folder" may write Thai names as TIS-620 without the UTF-8 flag
+    try { path = new TextDecoder('utf-8', {fatal: !(flags & 0x800)}).decode(raw); }
+    catch { path = new TextDecoder('windows-874').decode(raw); }
+    path = path.replace(/\\/g, '/');
+    if (path.endsWith('/') || path.startsWith('__MACOSX/') || flags & 1 || (method !== 0 && method !== 8)) continue;
+    const lh = await bytes(off, off + 30), start = off + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+    let blob = zip.slice(start, start + size);
+    if (method === 8) blob = await new Response(blob.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+    const name = path.split('/').pop();
+    const f = new File([blob], name, {type: MIME[name.split('.').pop().toLowerCase()] || ''});
+    f.path = path; out.push(f);
+  }
+  return out;
+}
 $('#lightbox').onclick = () => { $('#lightbox').style.display = 'none'; };
 </script>
 </body>
