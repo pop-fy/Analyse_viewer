@@ -139,14 +139,17 @@ function parseMd(text, fname) {
       // one quote per activity: "**หลักฐาน:**" followed by "- “...” (กิจกรรม N)" lines (older files: quote on the same line)
       q: [field('หลักฐาน', it), ...((it.split('**หลักฐาน:**')[1] || '').split('**เหตุผล:**')[0].match(/^- .*$/gm) || []).map(l => l.slice(2))].filter(Boolean),
       r: field('เหตุผล', it),
+      rv: field('ผลตรวจทาน', it),  // "คะแนน AI 2 → 3" written by apply_review.py
     })),
   }));
   if (domains.length !== 4 || domains.some(d => d.items.length !== 5 || d.items.some(i => !(i.s >= 0 && i.s <= 4))))
     throw new Error('รูปแบบไม่ใช่ไฟล์ผลวิเคราะห์ (ต้องมี 4 ด้าน × 5 ข้อ)');
   const sums = domains.map(d => d.items.reduce((a, i) => a + i.s, 0));
+  const aim = field('คะแนน AI').match(/(\d+) · (\d+) · (\d+) · (\d+) · รวม (\d+)/);  // apply_review.py: AI score before review
   return {
+    ai: aim ? {sums: aim.slice(1, 5).map(Number), total: +aim[5]} : null,
     code: field('รหัสหน่วยงาน') || fname.replace(/^analysis_|\.md$/g, ''), name: field('ชื่อหน่วยงาน'),
-    raw_file: field('ไฟล์ RAW'), hero_desc: (body.match(/^> (.*)$/m) || [])[1] || '',
+    raw_file: field('ไฟล์ RAW'), reviewed: field('ตรวจทานแล้ว'), hero_desc: (body.match(/^> (.*)$/m) || [])[1] || '',
     overall: (body.match(/## ข้อเสนอแนะโดยรวม\s*\n+([^\n]+)/) || [])[1] || '',
     acts: j ? JSON.parse(j[1]) : {}, domains, sums, total: sums.reduce((a, b) => a + b, 0),
   };
@@ -158,6 +161,7 @@ function buildHtml(ev) {
   const pct = (total / 80 * 100).toFixed(1);
   const dist = [4, 3, 2, 1, 0].map(s => doms.flatMap(d => d.items).filter(i => i.s === s).length);
   const [band, , bandCol] = grade(total / 4);
+  const nRv = doms.flatMap(d => d.items).filter(i => i.rv).length;
   const o = [`<!-- HERO SECTION -->
     <section class="hero-card"><div class="hero-header">
       <div class="hero-info">
@@ -166,10 +170,15 @@ function buildHtml(ev) {
         <p class="hero-desc">${esc(ev.hero_desc)}</p>
       </div>
       <div class="hero-stats-badge">
-        <div class="hero-score-val" id="totalScoreCount">${total}</div>
-        <div class="hero-score-max">เต็ม 80 คะแนน (${pct}%)</div>
+        ${ev.ai ? `<div style="display: flex; gap: 16px; justify-content: center; align-items: flex-end;">
+          <div><div style="font-size: 0.85rem; color: var(--text-muted);">คะแนน AI</div><div style="font-size: 2.6rem; font-weight: 800; color: var(--text-muted);">${ev.ai.total}</div></div>
+          <div style="font-size: 1.8rem; color: var(--text-dim); padding-bottom: 14px;">→</div>
+          <div><div style="font-size: 0.85rem; color: var(--accent-purple); font-weight: 600;">หลังผู้ตรวจทาน</div><div class="hero-score-val" id="totalScoreCount">${total}</div></div>
+        </div>` : `<div class="hero-score-val" id="totalScoreCount">${total}</div>`}
+        <div class="hero-score-max">เต็ม 80 คะแนน (${pct}%)${ev.ai ? '' : ' · คะแนนจาก AI ยังไม่ผ่านการตรวจทาน'}</div>
         <div class="hero-status-tag" style="background: ${bandCol};">ระดับสมรรถนะ: ${band}</div>
         <div class="hero-score-max" style="margin-top: 8px; font-size: 0.8rem;">ยังไม่รวมคะแนนเข้าร่วม 20 คะแนน</div>
+        ${ev.reviewed ? `<div class="hero-status-tag" style="background: var(--accent-purple); margin-top: 8px;">✎ ผ่านการตรวจทาน · ${esc(ev.reviewed)}</div>` : ''}
       </div>
     </div></section>
     <section class="metrics-grid">`];
@@ -180,6 +189,7 @@ function buildHtml(ev) {
         <div class="metric-top"><div class="metric-domain-name">${n}. ${CARD[i]}</div><span class="metric-domain-id">D${n}</span></div>
         <div class="metric-score-wrap"><span class="metric-num" style="color: ${col};">${s}</span><span class="metric-den">/ 20</span>
           <span class="metric-grade ${cls}">${lbl} (${s * 5}%)</span></div>
+        ${ev.ai ? `<div style="font-size: 0.85rem; color: var(--text-muted); margin: -4px 0 8px;">คะแนน AI ${ev.ai.sums[i]} → หลังผู้ตรวจทาน <b style="color: ${ev.ai.sums[i] === s ? 'var(--text-muted)' : 'var(--accent-purple)'};">${s}</b>${ev.ai.sums[i] === s ? ' (ไม่เปลี่ยน)' : ''}</div>` : ''}
         <div class="metric-progress-bg"><div class="metric-progress-bar" style="width: ${s * 5}%; background: ${col};"></div></div>
       </div>`);
   });
@@ -207,6 +217,7 @@ function buildHtml(ev) {
           <span style="font-size: 0.85rem; color: var(--text-dim); margin-right: 4px;">กรองตามคะแนน:</span>
           <button class="score-chip active" onclick="filterByScore('all')">ทั้งหมด (20)</button>
           ${[4, 3, 2, 1, 0].map((s, i) => dist[i] ? `<button class="score-chip" onclick="filterByScore('${s}')">${s === 4 ? 'คะแนนเต็ม 4' : 'คะแนน ' + s} (${dist[i]})</button>` : '').join('')}
+          ${nRv ? `<button class="score-chip" style="border-color: var(--accent-purple);" onclick="document.getElementById('searchInput').value='ปรับโดยผู้ตรวจทาน'; handleSearch()">✎ ปรับโดยผู้ตรวจทาน (${nRv})</button>` : ''}
         </div>
         <div class="search-input-wrap">
           <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -220,17 +231,18 @@ function buildHtml(ev) {
     <section class="domain-section" id="domain-d${n}" data-domain="d${n}">
       <div class="domain-header-card">
         <div class="domain-title-group"><h3><span>สมรรถนะด้านที่ ${n}: ${esc(d.title)}</span></h3><p>${esc(d.desc)}</p></div>
-        <div class="domain-score-pill ${grade(s)[1]}">${s} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">/ 20</span></div>
+        <div class="domain-score-pill ${grade(s)[1]}">${ev.ai && ev.ai.sums[i] !== s ? `<span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">AI ${ev.ai.sums[i]} →</span> ` : ''}${s} <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">/ 20</span></div>
       </div>
       <div class="criteria-list">${d.items.map((it, k) => `
-        <div class="criterion-item" data-score="${it.s}">
+        <div class="criterion-item" data-score="${it.s}"${it.rv ? ' style="border: 2px solid var(--accent-purple);"' : ''}>
           <div class="criterion-num">${n}.${k + 1}</div>
           <div class="criterion-body">
             <h4 class="criterion-title">${esc(it.t)}</h4>
+            ${it.rv ? `<div style="display: inline-block; margin: 2px 0 8px; padding: 3px 10px; border-radius: 999px; background: var(--accent-purple); color: #fff; font-size: 0.85rem;">✎ ปรับโดยผู้ตรวจทาน: ${esc(it.rv)}</div>` : ''}
             ${it.q.map(q => `<div class="ev-wrap" style="margin-bottom: 6px;"><div class="evidence-quote">${linkRefs(esc(q), acts)}</div><div class="raw-panel" style="margin-top: 6px;" hidden></div></div>`).join('')}
             <p class="rationale-text"><strong>เหตุผล:</strong> ${linkRefs(esc(it.r.replace(/\s*\(กิจกรรม [\d,\s–-]+\)\s*$/, '')), acts)}</p>
           </div>
-          <div class="score-badge-circle badge-score-${it.s}"><span class="sc-val">${it.s}</span><span class="sc-sub">เต็ม 4</span></div>
+          <div class="score-badge-circle badge-score-${it.s}"><span class="sc-val">${it.s}</span><span class="sc-sub">${it.rv ? 'AI ' + esc((it.rv.match(/AI\s*(\d)/) || [])[1]) : 'เต็ม 4'}</span></div>
         </div>`).join('')}
       </div>
       <div class="domain-insights-grid">
@@ -363,6 +375,11 @@ async function meta(u) {
     m.name = ((t.match(/\*\*ชื่อหน่วยงาน:\*\*\s*(.+)/) || [])[1] || '').trim();
     const s = t.match(/\*\*รวม\*\*\s*\|\s*\*\*(\d+)\*\*/); m.score = s ? +s[1] : null;
     m.doms = [...t.matchAll(/^\|\s*ด้านที่\s*\d[^|]*\|\s*\*\*(\d+)\*\*/gm)].map(x => +x[1]);
+    // written by apply_review.py: "ตรวจทานแล้ว: ปรับ 3 ข้อ (1.2, 3.3, 4.1) · …" / "ไม่ปรับคะแนน · …", "คะแนน AI: d1 · d2 · d3 · d4 · รวม n"
+    m.rv = ((t.match(/\*\*ตรวจทานแล้ว:\*\*\s*(.+)/) || [])[1] || '').trim();
+    m.chg = ((m.rv.match(/ปรับ \d+ ข้อ \(([^)]*)\)/) || [])[1] || '').split(', ').filter(Boolean);
+    const ai = t.match(/\*\*คะแนน AI:\*\*\s*(\d+) · (\d+) · (\d+) · (\d+) · รวม (\d+)/);
+    m.ai = ai ? {doms: ai.slice(1, 5).map(Number), score: +ai[5]} : {doms: m.doms, score: m.score};
   }
   if (u.csv) {
     const rows = parseCSV(await u.csv.text()).slice(1).filter(r => r.length > 4);
@@ -388,17 +405,45 @@ async function units(o) {
   const ms = await Promise.all(list.map(meta));
   // same list as index.html: highest total first
   const rows = list.map((u, i) => ({u, m: ms[i]})).sort((a, b) => (b.m.score ?? -1) - (a.m.score ?? -1) || a.u.code.localeCompare(b.u.code));
-  $('#main').innerHTML = `<input type="search" id="q" placeholder="ค้นหารหัสหรือชื่อหน่วยงาน..."><div class="mut" style="margin:6px 0">${list.length} หน่วยงาน · คลิกรหัสหน่วยงานเพื่อเปิดรายงาน</div>
-    <div class="wrap"><table class="list"><thead><tr><th>รหัส</th><th>หน่วยงาน</th><th class="num">D1</th><th class="num">D2</th><th class="num">D3</th><th class="num">D4</th><th class="num">รวม /80</th><th>ระดับ</th><th>ไฟล์แนบ</th></tr></thead><tbody>` +
+  // AI vs reviewer: status per unit + overview of the reviewed units
+  const st = m => !m.ai ? '' : !m.rv ? 'ยังไม่ตรวจ' : m.chg.length ? 'ปรับคะแนน' : 'ไม่ปรับ';
+  const done = ms.filter(m => m.rv), had = ms.filter(m => m.ai), chg = done.filter(m => m.chg.length);
+  const avg = f => done.length ? (done.reduce((a, m) => a + f(m), 0) / done.length).toFixed(1) : '–';
+  const freq = {}; chg.forEach(m => m.chg.forEach(i => freq[i] = (freq[i] || 0) + 1));
+  const top = Object.entries(freq).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 6);
+  const sign = n => n > 0 ? '+' + n : String(n);
+  const tag = s => s === 'ปรับคะแนน' ? `<span class="flag" style="background:#ede9fe;color:#5b21b6">✎ ปรับคะแนน</span>`
+    : s === 'ไม่ปรับ' ? `<span class="flag" style="background:#dcfce7;color:#166534">✓ ตรวจแล้ว ไม่ปรับ</span>`
+    : s ? `<span class="mut">ยังไม่ตรวจ</span>` : '';
+  $('#main').innerHTML = (done.length ? `<div class="panel" style="margin-bottom:10px">
+      <b>สรุปการตรวจทานคะแนน (ผู้ตรวจทาน เทียบ AI)</b>
+      <div style="margin-top:6px">ตรวจแล้ว <b>${done.length}</b> จาก ${had.length} หน่วย · ปรับคะแนน <b>${chg.length}</b> หน่วย รวม <b>${chg.reduce((a, m) => a + m.chg.length, 0)}</b> ข้อ · ยังไม่ตรวจ <b>${had.length - done.length}</b> หน่วย</div>
+      <div>คะแนนเฉลี่ยของหน่วยที่ตรวจแล้ว: AI <b>${avg(m => m.ai.score)}</b> → ผู้ตรวจทาน <b>${avg(m => m.score)}</b> /80
+        · รายด้าน ${[0, 1, 2, 3].map(d => `D${d + 1} ${avg(m => m.ai.doms[d])} → ${avg(m => m.doms[d])}`).join(' · ')}</div>
+      ${top.length ? `<div>ข้อย่อยที่ถูกปรับบ่อย: ${top.map(([i, n]) => `<b>${i}</b> (${n} หน่วย)`).join(' · ')}</div>` : ''}
+    </div>` : '') +
+    `<div class="toolbar"><input type="search" id="q" placeholder="ค้นหารหัสหรือชื่อหน่วยงาน...">
+      ${done.length ? `<select id="stf"><option value="">ทุกสถานะ</option><option>ปรับคะแนน</option><option>ไม่ปรับ</option><option>ยังไม่ตรวจ</option></select>` : ''}</div>
+    <div class="mut" style="margin:6px 0">${list.length} หน่วยงาน · คลิกรหัสหน่วยงานเพื่อเปิดรายงาน${done.length ? ' · D1–D4 ที่ผู้ตรวจทานปรับ แสดงเป็น <s>AI</s> → ใหม่' : ''}</div>
+    <div class="wrap"><table class="list"><thead><tr><th>รหัส</th><th>หน่วยงาน</th>${done.length ? '<th>สถานะ</th>' : ''}<th class="num">D1</th><th class="num">D2</th><th class="num">D3</th><th class="num">D4</th>` +
+    (done.length ? '<th class="num">AI /80</th><th class="num">ผู้ตรวจทาน /80</th><th class="num">ส่วนต่าง</th>' : '<th class="num">รวม /80</th>') + `<th>ระดับ</th><th>ไฟล์แนบ</th></tr></thead><tbody>` +
     rows.map(({u, m}) => {
       const band = m.score != null ? DASH.grade(m.score / 4)[0] : '';
-      return `<tr data-q="${esc((u.code + ' ' + m.name).toLowerCase())}"><td><a href="#" data-c="${esc(u.code)}">${esc(u.code)}</a></td><td>${esc(m.name || '')}${u.analysis ? '' : ' <span class="mut">(ไม่มี analysis)</span>'}</td>` +
-        [0, 1, 2, 3].map(i => `<td class="num">${m.doms[i] ?? '–'}</td>`).join('') +
-        `<td class="num total">${m.score ?? '–'}</td><td><span class="band ${DASH.BAND[band] || ''}">${band}</span></td>` +
+      const d = i => m.ai && m.rv && m.ai.doms[i] !== m.doms[i] ? `<s class="mut">${m.ai.doms[i]}</s> ${m.doms[i]}` : m.doms[i] ?? '–';
+      return `<tr data-q="${esc((u.code + ' ' + m.name).toLowerCase())}" data-st="${st(m)}"><td><a href="#" data-c="${esc(u.code)}">${esc(u.code)}</a></td><td style="max-width:320px">${esc(m.name || '')}${u.analysis ? '' : ' <span class="mut">(ไม่มี analysis)</span>'}</td>` +
+        (done.length ? `<td title="${esc(m.rv)}">${tag(st(m))}</td>` : '') +
+        [0, 1, 2, 3].map(i => `<td class="num">${d(i)}</td>`).join('') +
+        (done.length ? `<td class="num">${m.ai?.score ?? '–'}</td><td class="num total">${m.rv ? m.score : '–'}</td><td class="num">${m.rv ? sign(m.score - m.ai.score) : ''}</td>`
+          : `<td class="num total">${m.score ?? '–'}</td>`) +
+        `<td><span class="band ${DASH.BAND[band] || ''}">${band}</span></td>` +
         `<td>${m.nAtt || u.att.length}${m.flags ? ` <span class="flag">⚠ ต้องตรวจ ${m.flags}</span>` : ''}${m.noname ? ` <span class="mut">ชื่อหน่วยไม่ปรากฏ ${m.noname}</span>` : ''}</td></tr>`;
     }).join('') + '</tbody></table></div>';
   document.querySelectorAll('a[data-c]').forEach(e => e.onclick = ev => { ev.preventDefault(); unit(o, e.dataset.c); });
-  $('#q').oninput = e => { const q = e.target.value.trim().toLowerCase(); document.querySelectorAll('table.list tbody tr').forEach(r => r.hidden = !r.dataset.q.includes(q)); };
+  const filt = () => {
+    const q = $('#q').value.trim().toLowerCase(), s = $('#stf')?.value || '';
+    document.querySelectorAll('table.list tbody tr').forEach(r => r.hidden = !r.dataset.q.includes(q) || (s && r.dataset.st !== s));
+  };
+  $('#q').oninput = filt; if ($('#stf')) $('#stf').onchange = filt;
 }
 async function unit(o, code, tab = 'analysis', act = null) {
   const u = owners[o][code]; current = u; const m = await meta(u);
