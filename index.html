@@ -411,10 +411,8 @@ async function units(o) {
   const avg = f => done.length ? (done.reduce((a, m) => a + f(m), 0) / done.length).toFixed(1) : '–';
   const freq = {}; chg.forEach(m => m.chg.forEach(i => freq[i] = (freq[i] || 0) + 1));
   const top = Object.entries(freq).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 6);
-  const sign = n => n > 0 ? '+' + n : String(n);
-  const tag = s => s === 'ปรับคะแนน' ? `<span class="flag" style="background:#ede9fe;color:#5b21b6">✎ ปรับคะแนน</span>`
-    : s === 'ไม่ปรับ' ? `<span class="flag" style="background:#dcfce7;color:#166534">✓ ตรวจแล้ว ไม่ปรับ</span>`
-    : s ? `<span class="mut">ยังไม่ตรวจ</span>` : '';
+  // only units whose score was changed get a tag; "not changed" / "not reviewed" stay blank (still filterable)
+  const tag = s => s === 'ปรับคะแนน' ? `<span class="flag" style="background:#ede9fe;color:#5b21b6">✎ ปรับคะแนน</span>` : '';
   $('#main').innerHTML = (done.length ? `<div class="panel" style="margin-bottom:10px">
       <b>สรุปการตรวจทานคะแนน (ผู้ตรวจทาน เทียบ AI)</b>
       <div style="margin-top:6px">ตรวจแล้ว <b>${done.length}</b> จาก ${had.length} หน่วย · ปรับคะแนน <b>${chg.length}</b> หน่วย รวม <b>${chg.reduce((a, m) => a + m.chg.length, 0)}</b> ข้อ · ยังไม่ตรวจ <b>${had.length - done.length}</b> หน่วย</div>
@@ -424,19 +422,15 @@ async function units(o) {
     </div>` : '') +
     `<div class="toolbar"><input type="search" id="q" placeholder="ค้นหารหัสหรือชื่อหน่วยงาน...">
       ${done.length ? `<select id="stf"><option value="">ทุกสถานะ</option><option>ปรับคะแนน</option><option>ไม่ปรับ</option><option>ยังไม่ตรวจ</option></select>` : ''}</div>
-    <div class="mut" style="margin:6px 0">${list.length} หน่วยงาน · คลิกรหัสหน่วยงานเพื่อเปิดรายงาน${done.length ? ' · D1–D4 ที่ผู้ตรวจทานปรับ แสดงเป็น <s>AI</s> → ใหม่' : ''}</div>
+    <div class="mut" style="margin:6px 0">${list.length} หน่วยงาน · คลิกรหัสหน่วยงานเพื่อเปิดรายงาน${done.length ? ' · คะแนนในตารางเป็นคะแนนสุดท้าย (หลังผู้ตรวจทานถ้ามี)' : ''}</div>
     <div class="wrap"><table class="list"><thead><tr><th>รหัส</th><th>หน่วยงาน</th>${done.length ? '<th>สถานะ</th>' : ''}<th class="num">D1</th><th class="num">D2</th><th class="num">D3</th><th class="num">D4</th>` +
-    (done.length ? '<th class="num">AI /80</th><th class="num">ผู้ตรวจทาน /80</th><th class="num">ส่วนต่าง</th>' : '<th class="num">รวม /80</th>') + `<th>ระดับ</th><th>ไฟล์แนบ</th></tr></thead><tbody>` +
+    `<th class="num">รวม /80</th><th>ระดับ</th></tr></thead><tbody>` +
     rows.map(({u, m}) => {
       const band = m.score != null ? DASH.grade(m.score / 4)[0] : '';
-      const d = i => m.ai && m.rv && m.ai.doms[i] !== m.doms[i] ? `<s class="mut">${m.ai.doms[i]}</s> ${m.doms[i]}` : m.doms[i] ?? '–';
-      return `<tr data-q="${esc((u.code + ' ' + m.name).toLowerCase())}" data-st="${st(m)}"><td><a href="#" data-c="${esc(u.code)}">${esc(u.code)}</a></td><td style="max-width:320px">${esc(m.name || '')}${u.analysis ? '' : ' <span class="mut">(ไม่มี analysis)</span>'}</td>` +
+      return `<tr data-q="${esc((u.code + ' ' + m.name).toLowerCase())}" data-st="${st(m)}"><td><a href="#" data-c="${esc(u.code)}">${esc(u.code)}</a></td><td style="max-width:320px;white-space:normal">${esc(m.name || '')}${u.analysis ? '' : ' <span class="mut">(ไม่มี analysis)</span>'}</td>` +
         (done.length ? `<td title="${esc(m.rv)}">${tag(st(m))}</td>` : '') +
-        [0, 1, 2, 3].map(i => `<td class="num">${d(i)}</td>`).join('') +
-        (done.length ? `<td class="num">${m.ai?.score ?? '–'}</td><td class="num total">${m.rv ? m.score : '–'}</td><td class="num">${m.rv ? sign(m.score - m.ai.score) : ''}</td>`
-          : `<td class="num total">${m.score ?? '–'}</td>`) +
-        `<td><span class="band ${DASH.BAND[band] || ''}">${band}</span></td>` +
-        `<td>${m.nAtt || u.att.length}${m.flags ? ` <span class="flag">⚠ ต้องตรวจ ${m.flags}</span>` : ''}${m.noname ? ` <span class="mut">ชื่อหน่วยไม่ปรากฏ ${m.noname}</span>` : ''}</td></tr>`;
+        [0, 1, 2, 3].map(i => `<td class="num">${m.doms[i] ?? '–'}</td>`).join('') +
+        `<td class="num total">${m.score ?? '–'}</td><td><span class="band ${DASH.BAND[band] || ''}">${band}</span></td></tr>`;
     }).join('') + '</tbody></table></div>';
   document.querySelectorAll('a[data-c]').forEach(e => e.onclick = ev => { ev.preventDefault(); unit(o, e.dataset.c); });
   const filt = () => {
