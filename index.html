@@ -389,6 +389,7 @@ async function meta(u) {
     m.flags = rows.filter(r => /ต้องตรวจสอบ|หลายฉบับ|ไม่พบไฟล์/.test(r[4] + r[5])).length;
     m.noname = rows.filter(r => /ไม่พบชื่อหน่วย/.test(r[4])).length;
   }
+  if (!u.analysis && u.raw) { const a = await rawActs(u); m.mail = a.filter(x => x.ch === 'Mail').length; m.social = a.length - m.mail; }
   return (u.meta = m);
 }
 function home() {
@@ -424,15 +425,16 @@ async function units(o) {
     `<th class="num">รวม /80</th><th>ระดับ</th></tr></thead><tbody>` +
     rows.map(({u, m}) => {
       const band = m.score != null ? DASH.gradeTotal(m.score)[0] : '';
-      return `<tr data-q="${esc((u.code + ' ' + m.name).toLowerCase())}"><td><a href="#" data-c="${esc(u.code)}">${esc(u.code)}</a></td><td style="max-width:320px;white-space:normal">${esc(m.name || '')}${u.analysis ? '' : ' <span class="mut">(ไม่มี analysis)</span>'}</td>` +
+      return `<tr data-q="${esc((u.code + ' ' + m.name).toLowerCase())}"><td><a href="#" data-c="${esc(u.code)}">${esc(u.code)}</a></td><td style="max-width:320px;white-space:normal">${esc(m.name || '')}${u.analysis ? '' : m.mail == null ? ' <span class="mut">(ไม่มี analysis)</span>' : m.mail + m.social ? ` <span class="mut">Mail ${m.mail} · Social ${m.social}</span>` : ' <span class="mut">(ไม่มีข้อมูล)</span>'}</td>` +
         (done.length ? `<td>${m.chg?.length ? `<span class="flag" style="background:#ede9fe;color:#5b21b6">✎ ปรับคะแนน</span>` : ''}</td>` : '') +
         `<td class="num total">${m.score ?? '–'}</td><td><span class="band ${DASH.BAND[band] || ''}">${band}</span></td></tr>`;
     }).join('') + '</tbody></table></div>';
   document.querySelectorAll('a[data-c]').forEach(e => e.onclick = ev => { ev.preventDefault(); unit(o, e.dataset.c); });
   $('#q').oninput = e => { const q = e.target.value.trim().toLowerCase(); document.querySelectorAll('table.list tbody tr').forEach(r => r.hidden = !r.dataset.q.includes(q)); };
 }
-async function unit(o, code, tab = 'analysis', act = null) {
+async function unit(o, code, tab = null, act = null) {
   const u = owners[o][code]; current = u; const m = await meta(u);
+  tab ??= u.analysis ? 'analysis' : 'raw';
   urls.forEach(URL.revokeObjectURL); urls = [];
   setTitle(`${code} ${m.name}`); showBack(() => units(o));
   $('#main').innerHTML = `<div class="tabs"><button class="tab" data-t="analysis">วิเคราะห์${m.score != null ? ` (${m.score}/80)` : ''}</button>
@@ -453,6 +455,7 @@ async function unit(o, code, tab = 'analysis', act = null) {
   } else if (tab === 'raw') {
     if (!u.raw) { body.innerHTML = '<div class="panel empty">ไม่มีไฟล์ RAW</div>'; return; }
     const acts = await rawActs(u);
+    if (!acts.length) { body.innerHTML = '<div class="panel empty">ไม่มีข้อมูล: ไม่พบ Mail/Social ของหน่วยงานนี้ใน export</div>'; return; }
     const kinds = new Map();  // inject key -> {label, title, n}, in the order first answered
     for (const a of acts) {
       a.k = key(a.subj);
